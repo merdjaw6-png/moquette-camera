@@ -67,6 +67,8 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 #err, .calError { color: #ffb4b4; }
 .calBig { text-align: center; display: flex; flex-direction: column; gap: 12px; font-size: 22px; font-weight: 700; line-height: 1.5; }
 #calNumber { font-size: 96px; line-height: 1; }
+.calFlipActions { display: flex; flex-direction: column; gap: 12px; font-size: 16px; font-weight: 400; }
+.calFlipActions p { margin: 0; color: #d4dcdf; }
 
 #preview { position: fixed; inset: 0; z-index: 15; background: #000; display: flex; flex-direction: column; }
 #shot { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
@@ -122,7 +124,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
     <p>استعملها إذا كان الغطاء مائلًا أو مثبتًا تحت غطاء المحرك.</p>
     <ol>
       <li>اضغط «ابدأ العد».</li>
-      <li>خلال 3 ثوانٍ، ألصق <strong>شاشة الهاتف</strong> بجزء مستوٍ من الموكيت، ولا تضغط على الغطاء حتى لا يتحرك.</li>
+      <li>خلال 3 ثوانٍ، ألصق <strong>شاشة الهاتف</strong> بجزء مستوٍ من الموكيت، فيكون ظهر الهاتف والكاميرا نحوك ولن ترى الشاشة. لا تضغط على الغطاء حتى لا يتحرك.</li>
       <li>ثبّت الهاتف حتى تسمع صوت التأكيد.</li>
       <li>اقلب الهاتف ووجّه الكاميرا نحو الغطاء.</li>
     </ol>
@@ -138,6 +140,13 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   <div class="calBig">
     <div id="calNumber" class="num">3</div>
     <div id="calMessage"></div>
+    <div id="calFlipActions" class="calFlipActions" hidden>
+      <p>إذا كانت الكاميرا متجهة إلى الغطاء الآن ولم تُغلق هذه الرسالة، فالشاشة لم تكن ملتصقة به أثناء القياس. أعد المعايرة.</p>
+      <div class="row">
+        <button class="primary" id="calRetry">إعادة المعايرة</button>
+        <button class="ghost" id="calAbort">إلغاء</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -168,6 +177,7 @@ const CAL_COUNT = 3;         // seconds to place the phone before calibration
 const CAL_SAMPLE_MS = 1000;  // how long readings are averaged during calibration
 const CAL_MAX_SPREAD = 0.6;  // degrees of movement allowed while averaging
 const CAL_FLIP_ANGLE = 60;   // degrees from target at which the phone counts as flipped back
+const CAL_ACTIONS_DELAY_MS = 5000; // keeps the buttons away from a screen still touching the part
 
 let target = [0, 0, 1];      // required direction of the screen normal, in world coordinates
 let tolIndex = 0;
@@ -186,6 +196,7 @@ let autoSince = 0;
 let capturing = false;
 let calSamples = null;
 let calWaitFlip = false;
+let calActionsTimer = 0;
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -242,10 +253,7 @@ function update(x, y, z) {
     : angle <= AUTO_ANGLE ? 'ثبّت الهاتف، سيتم الالتقاط الآن'
     : 'اقترب من 0° للالتقاط التلقائي';
 
-  if (calWaitFlip && angle < CAL_FLIP_ANGLE) {
-    calWaitFlip = false;
-    $('calCount').hidden = true;
-  }
+  if (calWaitFlip && angle < CAL_FLIP_ANGLE) calEndWait();
   checkAutoCapture(angle);
 }
 
@@ -367,6 +375,13 @@ function setFlatMode() {
   $('calBtn').classList.remove('on');
 }
 $('flatBtn').addEventListener('click', setFlatMode);
+function calEndWait() {
+  calWaitFlip = false;
+  clearTimeout(calActionsTimer);
+  $('calFlipActions').hidden = true;
+  $('calCount').hidden = true;
+}
+
 function calFail(text) {
   beep(330, .22);
   vibrate([120, 60, 120]);
@@ -399,9 +414,11 @@ function calFinish() {
   vibrate(200);
   $('calNumber').textContent = '✓';
   $('calMessage').textContent = 'تم حفظ الزاوية. اقلب الهاتف ووجّه الكاميرا نحو الغطاء.';
+  calActionsTimer = setTimeout(() => { $('calFlipActions').hidden = false; }, CAL_ACTIONS_DELAY_MS);
 }
 
 function calStart() {
+  calEndWait();
   $('calSheet').hidden = true;
   $('calError').hidden = true;
   $('calCount').hidden = false;
@@ -430,6 +447,11 @@ $('calBtn').addEventListener('click', () => {
 });
 $('calCancel').addEventListener('click', () => { $('calSheet').hidden = true; });
 $('calSave').addEventListener('click', calStart);
+$('calRetry').addEventListener('click', calStart);
+$('calAbort').addEventListener('click', () => {
+  calEndWait();
+  setFlatMode();
+});
 $('tolBtn').addEventListener('click', () => {
   tolIndex = (tolIndex + 1) % TOLERANCES.length;
   $('tolVal').textContent = '±' + TOLERANCES[tolIndex] + '°';
