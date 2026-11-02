@@ -74,6 +74,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 #shot { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
 #previewBar { padding: 12px 16px calc(env(safe-area-inset-bottom,0px) + 14px); display: flex; flex-direction: column; gap: 10px; }
 #shotInfo { text-align: center; color: var(--muted); font-size: 14px; }
+#shotDiag { text-align: center; color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.5; }
 #toast { position: fixed; bottom: calc(env(safe-area-inset-bottom,0px) + 116px); left: 16px; right: 16px; z-index: 12; text-align: center; pointer-events: none; }
 #toast span { display: inline-block; background: var(--bad); color: #fff; font-weight: 700; padding: 8px 14px; border-radius: 9px; }
 </style>
@@ -154,6 +155,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   <img id="shot" alt="الصورة الملتقطة">
   <div id="previewBar">
     <div id="shotInfo"></div>
+    <div id="shotDiag" class="num"></div>
     <div class="row">
       <button class="primary" id="saveBtn">حفظ الصورة</button>
       <button class="ghost" id="retakeBtn">إعادة التصوير</button>
@@ -197,6 +199,8 @@ let capturing = false;
 let calSamples = null;
 let calWaitFlip = false;
 let calActionsTimer = 0;
+let lastEuler = null;
+let calEuler = null;
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -218,6 +222,7 @@ function targetInDevice(R, t) {
 function onOrientation(e) {
   if (e.beta === null || e.gamma === null) return;
   lastR = rotation(e.alpha || 0, e.beta, e.gamma);
+  lastEuler = [e.alpha, e.beta, e.gamma];
   if (calSamples) calSamples.push([lastR[0][2], lastR[1][2], lastR[2][2]]);
   const d = targetInDevice(lastR, target);
   if (!smooth) smooth = d;
@@ -370,6 +375,7 @@ document.addEventListener('visibilitychange', () => {
 /* Modes */
 function setFlatMode() {
   target = [0, 0, 1];
+  calEuler = null;
   smooth = null;
   $('flatBtn').classList.add('on');
   $('calBtn').classList.remove('on');
@@ -404,6 +410,7 @@ function calFinish() {
 
   // The screen faces the part now, so for the photo it must face the opposite way.
   target = avg.map(v => -v);
+  calEuler = lastEuler;
   smooth = null;
   autoArmed = false;
   autoSince = 0;
@@ -481,6 +488,21 @@ async function takePhoto() {
   return grabFrame();
 }
 
+/* Splits the error into the part gravity can verify (tilt) and the part that relies on the gyro (heading). */
+function diagnostics() {
+  if (!lastR) return '';
+  const euler = v => v ? v.map(x => x === null ? 'null' : x.toFixed(1)).join(' / ') : '-';
+  const n = [lastR[0][2], lastR[1][2], lastR[2][2]];
+  const elevation = v => Math.atan2(v[2], Math.hypot(v[0], v[1])) / RAD;
+  const tilt = Math.abs(elevation(n) - elevation(target));
+  let heading = '-';
+  if (Math.hypot(target[0], target[1]) > 0.1) {
+    const diff = (Math.atan2(n[0], n[1]) - Math.atan2(target[0], target[1])) / RAD;
+    heading = Math.abs(((diff + 540) % 360) - 180).toFixed(1);
+  }
+  return `${calEuler ? 'CAL' : 'FLAT'} tilt ${tilt.toFixed(1)} heading ${heading}\nnow ${euler(lastEuler)}\ncal ${euler(calEuler)}`;
+}
+
 function fileName(angle) {
   const pad = n => String(n).padStart(2, '0');
   const t = new Date();
@@ -512,6 +534,7 @@ async function capture() {
   shotName = fileName(angle);
   $('shot').src = URL.createObjectURL(shotBlob);
   $('shotInfo').textContent = lastAngle === null ? 'بدون قراءة زاوية' : `الميلان عند الالتقاط: ${angle.toFixed(1)}°`;
+  $('shotDiag').innerText = diagnostics();
   $('preview').hidden = false;
 }
 
