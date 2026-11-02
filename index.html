@@ -292,15 +292,33 @@ function setState(next) {
   else if (prev === 'good') { beep(330, .22); vibrate([120, 60, 120]); }
 }
 
+/* iOS can suspend the audio context after the camera starts, and only a touch may resume it. */
+function ensureAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!audio) {
+    // Lets the beeps play when the iPhone's silent switch is on; the app has its own sound button.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (err) { /* optional */ }
+    audio = new Ctx();
+  }
+  if (audio.state !== 'running') audio.resume().catch(() => {});
+}
+document.addEventListener('touchend', ensureAudio, { passive: true });
+document.addEventListener('click', ensureAudio);
+
 function beep(freq, seconds) {
   if (!soundOn || !audio) return;
-  const osc = audio.createOscillator(), gain = audio.createGain();
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(.25, audio.currentTime);
-  gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + seconds);
-  osc.connect(gain).connect(audio.destination);
-  osc.start();
-  osc.stop(audio.currentTime + seconds);
+  const play = () => {
+    const osc = audio.createOscillator(), gain = audio.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(.6, audio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + seconds);
+    osc.connect(gain).connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + seconds);
+  };
+  if (audio.state === 'running') play();
+  else audio.resume().then(play).catch(() => {});
 }
 
 function vibrate(pattern) {
@@ -348,8 +366,7 @@ async function keepAwake() {
 }
 
 $('startBtn').addEventListener('click', async () => {
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (Ctx) { audio = new Ctx(); audio.resume(); }
+  ensureAudio();
   const sensors = await startSensors();
   const camera = await startCamera();
   keepAwake();
@@ -466,6 +483,7 @@ $('tolBtn').addEventListener('click', () => {
 $('soundBtn').addEventListener('click', () => {
   soundOn = !soundOn;
   $('soundBtn').textContent = soundOn ? 'الصوت: يعمل' : 'الصوت: متوقف';
+  beep(1320, .15);   // lets the user confirm the phone is actually playing sound
 });
 
 /* Capture */
