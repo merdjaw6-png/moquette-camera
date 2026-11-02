@@ -64,7 +64,9 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .ghost { background: transparent; border: 1px solid var(--line); padding: 12px; border-radius: 10px; }
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
-#err { color: #ffb4b4; }
+#err, .calError { color: #ffb4b4; }
+.calBig { text-align: center; display: flex; flex-direction: column; gap: 12px; font-size: 22px; font-weight: 700; line-height: 1.5; }
+#calNumber { font-size: 96px; line-height: 1; }
 
 #preview { position: fixed; inset: 0; z-index: 15; background: #000; display: flex; flex-direction: column; }
 #shot { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
@@ -119,14 +121,23 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
     <h2>معايرة على الغطاء</h2>
     <p>استعملها إذا كان الغطاء مائلًا أو مثبتًا تحت غطاء المحرك.</p>
     <ol>
-      <li>ألصق ظهر الهاتف بجزء مستوٍ من الموكيت.</li>
-      <li>اضغط «ثبّت الزاوية» دون تحريك الهاتف.</li>
-      <li>ابتعد إلى مسافة التصوير مع إبقاء الدائرة خضراء.</li>
+      <li>اضغط «ابدأ العد».</li>
+      <li>خلال 3 ثوانٍ، ألصق <strong>شاشة الهاتف</strong> بجزء مستوٍ من الموكيت، ولا تضغط على الغطاء حتى لا يتحرك.</li>
+      <li>ثبّت الهاتف حتى تسمع صوت التأكيد.</li>
+      <li>اقلب الهاتف ووجّه الكاميرا نحو الغطاء.</li>
     </ol>
+    <p id="calError" class="calError" hidden></p>
     <div class="row">
-      <button class="primary" id="calSave">ثبّت الزاوية</button>
+      <button class="primary" id="calSave">ابدأ العد</button>
       <button class="ghost" id="calCancel">إلغاء</button>
     </div>
+  </div>
+</div>
+
+<div class="sheet" id="calCount" hidden>
+  <div class="calBig">
+    <div id="calNumber" class="num">3</div>
+    <div id="calMessage"></div>
   </div>
 </div>
 
@@ -153,6 +164,10 @@ const HYSTERESIS = 0.25;     // degrees past the tolerance before leaving "good"
 const AUTO_ANGLE = 0.15;     // degrees treated as zero for automatic capture
 const AUTO_HOLD_MS = 400;    // how long the phone must stay at zero before capturing
 const AUTO_REARM = 0.5;      // degrees to move away before another automatic capture
+const CAL_COUNT = 3;         // seconds to place the phone before calibration
+const CAL_SAMPLE_MS = 1000;  // how long readings are averaged during calibration
+const CAL_MAX_SPREAD = 0.6;  // degrees of movement allowed while averaging
+const CAL_FLIP_ANGLE = 60;   // degrees from target at which the phone counts as flipped back
 
 let target = [0, 0, 1];      // required direction of the screen normal, in world coordinates
 let tolIndex = 0;
@@ -169,6 +184,8 @@ let toastTimer = 0;
 let autoArmed = true;
 let autoSince = 0;
 let capturing = false;
+let calSamples = null;
+let calWaitFlip = false;
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -190,6 +207,7 @@ function targetInDevice(R, t) {
 function onOrientation(e) {
   if (e.beta === null || e.gamma === null) return;
   lastR = rotation(e.alpha || 0, e.beta, e.gamma);
+  if (calSamples) calSamples.push([lastR[0][2], lastR[1][2], lastR[2][2]]);
   const d = targetInDevice(lastR, target);
   if (!smooth) smooth = d;
   else smooth = smooth.map((v, i) => v + (d[i] - v) * FILTER);
@@ -224,6 +242,10 @@ function update(x, y, z) {
     : angle <= AUTO_ANGLE ? 'ثبّت الهاتف، سيتم الالتقاط الآن'
     : 'اقترب من 0° للالتقاط التلقائي';
 
+  if (calWaitFlip && angle < CAL_FLIP_ANGLE) {
+    calWaitFlip = false;
+    $('calCount').hidden = true;
+  }
   checkAutoCapture(angle);
 }
 
@@ -232,7 +254,7 @@ function checkAutoCapture(angle) {
     if (angle > AUTO_REARM) autoArmed = true;
     return;
   }
-  const blocked = !stream || capturing || !$('preview').hidden || !$('calSheet').hidden || !$('startSheet').hidden;
+  const blocked = !stream || capturing || !$('preview').hidden || !$('calSheet').hidden || !$('calCount').hidden || !$('startSheet').hidden;
   if (blocked || angle > AUTO_ANGLE) { autoSince = 0; return; }
   const now = performance.now();
   if (!autoSince) autoSince = now;
@@ -345,18 +367,69 @@ function setFlatMode() {
   $('calBtn').classList.remove('on');
 }
 $('flatBtn').addEventListener('click', setFlatMode);
-$('calBtn').addEventListener('click', () => { $('calSheet').hidden = false; });
-$('calCancel').addEventListener('click', () => { $('calSheet').hidden = true; });
-$('calSave').addEventListener('click', () => {
-  $('calSheet').hidden = true;
-  if (!lastR) { toast('لا تصل قراءات من الحساس'); return; }
-  target = [lastR[0][2], lastR[1][2], lastR[2][2]];
+function calFail(text) {
+  beep(330, .22);
+  vibrate([120, 60, 120]);
+  $('calCount').hidden = true;
+  $('calError').textContent = text;
+  $('calError').hidden = false;
+  $('calSheet').hidden = false;
+}
+
+function calFinish() {
+  const samples = calSamples;
+  calSamples = null;
+  if (samples.length < 5) { calFail('لا تصل قراءات كافية من الحساس. أعد المحاولة.'); return; }
+  const sum = samples.reduce((acc, v) => acc.map((x, i) => x + v[i]), [0, 0, 0]);
+  const n = Math.hypot(...sum);
+  const avg = sum.map(v => v / n);
+  const spread = Math.max(...samples.map(v =>
+    Math.acos(Math.min(1, v[0] * avg[0] + v[1] * avg[1] + v[2] * avg[2])) / RAD));
+  if (spread > CAL_MAX_SPREAD) { calFail('تحرّك الهاتف أثناء القياس. ثبّته وأعد المحاولة.'); return; }
+
+  // The screen faces the part now, so for the photo it must face the opposite way.
+  target = avg.map(v => -v);
   smooth = null;
-  autoArmed = false;   // the phone is still against the part, wait until it moves away
+  autoArmed = false;
   autoSince = 0;
+  calWaitFlip = true;
   $('calBtn').classList.add('on');
   $('flatBtn').classList.remove('on');
+  beep(1320, .3);
+  vibrate(200);
+  $('calNumber').textContent = '✓';
+  $('calMessage').textContent = 'تم حفظ الزاوية. اقلب الهاتف ووجّه الكاميرا نحو الغطاء.';
+}
+
+function calStart() {
+  $('calSheet').hidden = true;
+  $('calError').hidden = true;
+  $('calCount').hidden = false;
+  let left = CAL_COUNT;
+  $('calNumber').textContent = left;
+  $('calMessage').textContent = 'ألصق شاشة الهاتف بالموكيت';
+  beep(880, .08);
+  const timer = setInterval(() => {
+    left -= 1;
+    if (left > 0) {
+      $('calNumber').textContent = left;
+      beep(880, .08);
+      return;
+    }
+    clearInterval(timer);
+    $('calNumber').textContent = '...';
+    $('calMessage').textContent = 'لا تحرّك الهاتف';
+    calSamples = [];
+    setTimeout(calFinish, CAL_SAMPLE_MS);
+  }, 1000);
+}
+
+$('calBtn').addEventListener('click', () => {
+  $('calError').hidden = true;
+  $('calSheet').hidden = false;
 });
+$('calCancel').addEventListener('click', () => { $('calSheet').hidden = true; });
+$('calSave').addEventListener('click', calStart);
 $('tolBtn').addEventListener('click', () => {
   tolIndex = (tolIndex + 1) % TOLERANCES.length;
   $('tolVal').textContent = '±' + TOLERANCES[tolIndex] + '°';
