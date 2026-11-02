@@ -150,6 +150,9 @@ const TOLERANCES = [1, 0.5, 2];
 const TARGET_R = 60, OUTER_R = 140;
 const FILTER = 0.25;         // smoothing of the sensor signal
 const HYSTERESIS = 0.25;     // degrees past the tolerance before leaving "good"
+const AUTO_ANGLE = 0.15;     // degrees treated as zero for automatic capture
+const AUTO_HOLD_MS = 400;    // how long the phone must stay at zero before capturing
+const AUTO_REARM = 0.5;      // degrees to move away before another automatic capture
 
 let target = [0, 0, 1];      // required direction of the screen normal, in world coordinates
 let tolIndex = 0;
@@ -163,6 +166,9 @@ let stream = null;
 let shotBlob = null;
 let shotName = '';
 let toastTimer = 0;
+let autoArmed = true;
+let autoSince = 0;
+let capturing = false;
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -213,7 +219,24 @@ function update(x, y, z) {
   $('bubble').setAttribute('cy', (-sy / len * r).toFixed(1));
 
   $('angle').textContent = angle.toFixed(1) + '°';
-  $('hint').textContent = state === 'good' ? 'ثبّت يدك والتقط الصورة' : correctionHint(sx, sy, angle);
+  $('hint').textContent = state !== 'good' ? correctionHint(sx, sy, angle)
+    : !autoArmed ? 'حرّك الهاتف قليلًا لالتقاط صورة تلقائية جديدة، أو اضغط الزر'
+    : angle <= AUTO_ANGLE ? 'ثبّت الهاتف، سيتم الالتقاط الآن'
+    : 'اقترب من 0° للالتقاط التلقائي';
+
+  checkAutoCapture(angle);
+}
+
+function checkAutoCapture(angle) {
+  if (!autoArmed) {
+    if (angle > AUTO_REARM) autoArmed = true;
+    return;
+  }
+  const blocked = !stream || capturing || !$('preview').hidden || !$('calSheet').hidden || !$('startSheet').hidden;
+  if (blocked || angle > AUTO_ANGLE) { autoSince = 0; return; }
+  const now = performance.now();
+  if (!autoSince) autoSince = now;
+  if (now - autoSince >= AUTO_HOLD_MS) capture();
 }
 
 function correctionHint(sx, sy, angle) {
@@ -329,6 +352,8 @@ $('calSave').addEventListener('click', () => {
   if (!lastR) { toast('لا تصل قراءات من الحساس'); return; }
   target = [lastR[0][2], lastR[1][2], lastR[2][2]];
   smooth = null;
+  autoArmed = false;   // the phone is still against the part, wait until it moves away
+  autoSince = 0;
   $('calBtn').classList.add('on');
   $('flatBtn').classList.remove('on');
 });
@@ -376,18 +401,29 @@ $('shutter').addEventListener('click', async () => {
     return;
   }
   if (!stream) { toast('الكاميرا غير مشغّلة'); return; }
+  capture();
+});
+
+async function capture() {
+  if (capturing) return;
+  capturing = true;
+  autoArmed = false;
+  autoSince = 0;
   const angle = lastAngle === null ? 0 : lastAngle;
+  beep(1760, .08);
   shotBlob = await takePhoto();
+  capturing = false;
   if (!shotBlob) { toast('تعذّر التقاط الصورة، أعد المحاولة'); return; }
   shotName = fileName(angle);
   $('shot').src = URL.createObjectURL(shotBlob);
   $('shotInfo').textContent = lastAngle === null ? 'بدون قراءة زاوية' : `الميلان عند الالتقاط: ${angle.toFixed(1)}°`;
   $('preview').hidden = false;
-});
+}
 
 $('retakeBtn').addEventListener('click', () => {
   URL.revokeObjectURL($('shot').src);
   $('preview').hidden = true;
+  autoArmed = false;
 });
 
 $('saveBtn').addEventListener('click', async () => {
@@ -404,6 +440,7 @@ $('saveBtn').addEventListener('click', async () => {
   }
   URL.revokeObjectURL($('shot').src);
   $('preview').hidden = true;
+  autoArmed = false;
 });
 
 setFlatMode();
