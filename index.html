@@ -175,6 +175,9 @@ const HYSTERESIS = 0.25;     // degrees past the tolerance before leaving "good"
 const AUTO_ANGLE = 0.15;     // degrees treated as zero for automatic capture
 const AUTO_HOLD_MS = 400;    // how long the phone must stay at zero before capturing
 const AUTO_REARM = 0.5;      // degrees to move away before another automatic capture
+const CAMERA_SIZES = [[4096, 3072], [1920, 1080], null];
+const CAMERA_CHECK_MS = 2500; // how long to wait for a visible picture at each camera size
+const BLACK_LEVEL = 16;      // brightest pixel below this counts as a black picture
 const CAL_COUNT = 3;         // seconds to place the phone before calibration
 const CAL_SAMPLE_MS = 1000;  // how long readings are averaged during calibration
 const CAL_MAX_SPREAD = 0.6;  // degrees of movement allowed while averaging
@@ -347,14 +350,71 @@ async function startSensors() {
   return true;
 }
 
+/* True when a video frame or image has no visible content. */
+function sourceIsBlack(source) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(source, 0, 0, 32, 32);
+  const data = ctx.getImageData(0, 0, 32, 32).data;
+  for (let i = 0; i < data.length; i += 4) {
+    if ((data[i] + data[i + 1] + data[i + 2]) / 3 >= BLACK_LEVEL) return false;
+  }
+  return true;
+}
+
+async function blobIsBlack(blob) {
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const black = sourceIsBlack(bitmap);
+    bitmap.close();
+    return black;
+  } catch (err) {
+    return true;
+  }
+}
+
+async function openCamera(size) {
+  const video = { facingMode: { ideal: 'environment' } };
+  if (size) {
+    video.width = { ideal: size[0] };
+    video.height = { ideal: size[1] };
+  }
+  stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+  $('video').srcObject = stream;
+  await $('video').play().catch(() => {});
+}
+
+function closeCamera() {
+  if (stream) stream.getTracks().forEach(track => track.stop());
+  stream = null;
+}
+
+async function videoShowsPicture() {
+  const video = $('video');
+  const end = performance.now() + CAMERA_CHECK_MS;
+  while (performance.now() < end) {
+    if (video.videoWidth > 0 && !sourceIsBlack(video)) return true;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+/* Some Android phones give a black picture at the highest resolution, so step down until one shows. */
 async function startCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+  for (const size of CAMERA_SIZES) {
+    try {
+      await openCamera(size);
+      if (await videoShowsPicture()) return true;
+      closeCamera();
+    } catch (err) {
+      closeCamera();
+    }
+  }
+  // Every size was black, which is what a dark room looks like, so keep the best quality.
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 3072 } },
-    });
-    $('video').srcObject = stream;
+    await openCamera(CAMERA_SIZES[0]);
     return true;
   } catch (err) {
     return false;
@@ -489,21 +549,27 @@ $('soundBtn').addEventListener('click', () => {
 /* Capture */
 function grabFrame() {
   const video = $('video'), canvas = $('canvas');
+  if (!video.videoWidth) return Promise.resolve(null);
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0);
   return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .95));
 }
 
+/* ImageCapture gives the sharpest photo but can return black on Android, so keep a video frame as backup. */
 async function takePhoto() {
+  const frame = await grabFrame();
   const track = stream && stream.getVideoTracks()[0];
   if (track && window.ImageCapture) {
     try {
       const timeout = new Promise((_, reject) => setTimeout(reject, 4000));
-      return await Promise.race([new ImageCapture(track).takePhoto(), timeout]);
-    } catch (err) { /* fall back to the video frame */ }
+      const photo = await Promise.race([new ImageCapture(track).takePhoto(), timeout]);
+      $('video').play().catch(() => {});
+      if (!frame || !(await blobIsBlack(photo))) return photo;
+    } catch (err) { /* use the video frame */ }
+    $('video').play().catch(() => {});
   }
-  return grabFrame();
+  return frame;
 }
 
 /* Splits the error into the part gravity can verify (tilt) and the part that relies on the gyro (heading). */
