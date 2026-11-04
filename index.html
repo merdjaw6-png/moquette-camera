@@ -26,6 +26,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
 
 #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+#previewCanvas { position: fixed; inset: 0; width: 100%; height: 100%; background: #000; }
 #edge { position: fixed; inset: 0; border: 8px solid var(--state); pointer-events: none; transition: border-color .12s; }
 
 #status { position: fixed; top: 0; inset-inline: 0; padding: calc(env(safe-area-inset-top,0px) + 18px) 18px 12px;
@@ -82,6 +83,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 </head>
 <body>
 <video id="video" autoplay playsinline muted></video>
+<canvas id="previewCanvas" hidden></canvas>
 <div id="edge"></div>
 
 <div id="status">
@@ -452,6 +454,27 @@ async function keepAwake() {
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (err) { /* optional */ }
 }
 
+/* Some Android phones leave a high resolution <video> black on screen although its frames can be read,
+   so the picture is painted onto a canvas there. */
+function drawPreview() {
+  const video = $('video'), canvas = $('previewCanvas');
+  if (video.videoWidth && $('preview').hidden) {
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.round(window.innerWidth * ratio), height = Math.round(window.innerHeight * ratio);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+    const w = video.videoWidth * scale, h = video.videoHeight * scale;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(video, (width - w) / 2, (height - h) / 2, w, h);
+  }
+  requestAnimationFrame(drawPreview);
+}
+
 function updateCameraDiag() {
   const video = $('video');
   const track = stream && stream.getVideoTracks()[0];
@@ -488,6 +511,10 @@ $('startBtn').addEventListener('click', async () => {
   }
   lenses = await listLenses();
   $('lensBtn').hidden = lenses.length < 2;
+  if (/Android/i.test(navigator.userAgent)) {
+    $('previewCanvas').hidden = false;
+    drawPreview();
+  }
   $('camDiag').hidden = false;
   updateCameraDiag();
   setInterval(updateCameraDiag, 1000);
