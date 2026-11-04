@@ -173,13 +173,14 @@ const $ = id => document.getElementById(id);
 const RAD = Math.PI / 180;
 const TOLERANCES = [1, 0.5, 2];
 const TARGET_R = 60, OUTER_R = 140;
-const FILTER = 0.25;         // smoothing of the sensor signal
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const FILTER = IS_ANDROID ? 0.15 : 0.25; // smoothing of the sensor signal, Android readings can be noisier
 const HYSTERESIS = 0.25;     // degrees past the tolerance before leaving "good"
-const AUTO_ANGLE = 0.15;     // degrees treated as zero for automatic capture
-const AUTO_HOLD_MS = 400;    // how long the phone must stay at zero before capturing
+const AUTO_ANGLE = IS_ANDROID ? 0.3 : 0.15; // degrees treated as zero for automatic capture
+const AUTO_HOLD_MS = IS_ANDROID ? 300 : 400; // how long the phone must stay at zero before capturing
 const AUTO_REARM = 0.5;      // degrees to move away before another automatic capture
 // Android takes full size photos separately, and its picture can stay black on screen at the highest stream size.
-const CAMERA_SIZES = /Android/i.test(navigator.userAgent)
+const CAMERA_SIZES = IS_ANDROID
   ? [[1920, 1440], [1280, 960], null]
   : [[4096, 3072], [1920, 1080], null];
 const CAMERA_CHECK_MS = 2500; // how long to wait for a visible picture at each camera size
@@ -212,6 +213,7 @@ let lastEuler = null;
 let calEuler = null;
 let lenses = [];
 let shotSource = '';
+let sensorLog = [];
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -236,6 +238,9 @@ function onOrientation(e) {
   lastEuler = [e.alpha, e.beta, e.gamma];
   if (calSamples) calSamples.push([lastR[0][2], lastR[1][2], lastR[2][2]]);
   const d = targetInDevice(lastR, target);
+  const now = performance.now();
+  sensorLog.push([now, Math.acos(Math.min(1, Math.max(-1, d[2]))) / RAD]);
+  while (sensorLog[0][0] < now - 1000) sensorLog.shift();
   if (!smooth) smooth = d;
   else smooth = smooth.map((v, i) => v + (d[i] - v) * FILTER);
   const n = Math.hypot(...smooth);
@@ -463,12 +468,19 @@ async function keepAwake() {
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (err) { /* optional */ }
 }
 
+/* Readings per second, and how far the raw angle moved during the last second. */
+function sensorSummary() {
+  if (!sensorLog.length) return 'none';
+  const angles = sensorLog.map(entry => entry[1]);
+  return `${sensorLog.length}/s jitter ${(Math.max(...angles) - Math.min(...angles)).toFixed(2)}`;
+}
+
 function updateCameraDiag() {
   const video = $('video');
   const track = stream && stream.getVideoTracks()[0];
   if (!track) { $('camDiag').textContent = 'camera off'; return; }
   const levels = video.videoWidth > 0 ? sourceLevels(video) : { avg: 0, max: 0 };
-  $('camDiag').textContent = `${track.label || 'camera'} | ${video.videoWidth}x${video.videoHeight} | ${track.readyState}${track.muted ? ' muted' : ''}${video.paused ? ' paused' : ''} | lenses ${lenses.length} | light ${Math.round(levels.avg)}/${Math.round(levels.max)}`;
+  $('camDiag').textContent = `${track.label || 'camera'} | ${video.videoWidth}x${video.videoHeight} | ${track.readyState}${track.muted ? ' muted' : ''}${video.paused ? ' paused' : ''} | lenses ${lenses.length} | light ${Math.round(levels.avg)}/${Math.round(levels.max)} | sensor ${sensorSummary()}`;
 }
 
 $('lensBtn').addEventListener('click', async () => {
