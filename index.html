@@ -644,7 +644,7 @@ async function takePhoto() {
     try {
       const timeout = new Promise((_, reject) => setTimeout(reject, 4000));
       const camera = new ImageCapture(track);
-      const caps = await camera.getPhotoCapabilities().catch(() => null);
+      const caps = await Promise.race([camera.getPhotoCapabilities().catch(() => null), timeout]);
       const full = caps && caps.imageWidth && caps.imageHeight
         ? { imageWidth: caps.imageWidth.max, imageHeight: caps.imageHeight.max }
         : undefined;
