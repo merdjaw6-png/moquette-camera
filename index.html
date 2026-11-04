@@ -34,6 +34,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   padding: 8px 18px; border-radius: 10px; transition: background .12s; }
 #hint { background: var(--panel); padding: 4px 12px; border-radius: 8px; font-size: 16px; margin-top: 4px; }
 #hint:empty { display: none; }
+#camDiag { background: var(--panel); color: var(--muted); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; margin-top: 4px; max-width: 100%; overflow-wrap: anywhere; }
 
 #level { position: fixed; top: 50%; left: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px; pointer-events: none; }
 #level circle, #level line { fill: none; vector-effect: non-scaling-stroke; }
@@ -86,6 +87,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 <div id="status">
   <div id="banner" role="status" aria-live="polite">في انتظار الحساسات</div>
   <div id="hint"></div>
+  <div id="camDiag" class="num" hidden></div>
 </div>
 
 <svg id="level" viewBox="-150 -150 300 300" aria-hidden="true">
@@ -107,6 +109,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   <div class="side end">
     <button class="chip" id="tolBtn">الدقة <span class="num" id="tolVal">±1°</span></button>
     <button class="chip" id="soundBtn">الصوت: يعمل</button>
+    <button class="chip" id="lensBtn" hidden>تبديل العدسة</button>
   </div>
 </div>
 
@@ -204,6 +207,8 @@ let calWaitFlip = false;
 let calActionsTimer = 0;
 let lastEuler = null;
 let calEuler = null;
+let lenses = [];
+let shotSource = '';
 
 /* Device-to-world rotation from a deviceorientation reading (W3C Z-X'-Y'' convention). */
 function rotation(alpha, beta, gamma) {
@@ -374,8 +379,8 @@ async function blobIsBlack(blob) {
   }
 }
 
-async function openCamera(size) {
-  const video = { facingMode: { ideal: 'environment' } };
+async function openCamera(size, deviceId) {
+  const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } };
   if (size) {
     video.width = { ideal: size[0] };
     video.height = { ideal: size[1] };
@@ -401,16 +406,38 @@ async function videoShowsPicture() {
 }
 
 /* Some Android phones give a black picture at the highest resolution, so step down until one shows. */
-async function startCamera() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+async function openWithPicture(deviceId) {
   for (const size of CAMERA_SIZES) {
     try {
-      await openCamera(size);
+      await openCamera(size, deviceId);
       if (await videoShowsPicture()) return true;
-      closeCamera();
-    } catch (err) {
-      closeCamera();
-    }
+    } catch (err) { /* try the next size */ }
+    closeCamera();
+  }
+  return false;
+}
+
+/* Lens names are only known after camera permission; front cameras are left out when they can be recognized. */
+async function listLenses() {
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const cameras = devices.filter(device => device.kind === 'videoinput' && device.deviceId);
+  const back = cameras.filter(device => !/front|user|selfie/i.test(device.label));
+  return back.length ? back : cameras;
+}
+
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+  if (await openWithPicture()) return true;
+  // The phone's default back camera can be a lens that gives no picture, such as a depth sensor.
+  try {
+    await openCamera(CAMERA_SIZES[2]);
+    lenses = await listLenses();
+    closeCamera();
+  } catch (err) {
+    closeCamera();
+  }
+  for (const lens of lenses) {
+    if (await openWithPicture(lens.deviceId)) return true;
   }
   // Every size was black, which is what a dark room looks like, so keep the best quality.
   try {
@@ -425,16 +452,45 @@ async function keepAwake() {
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (err) { /* optional */ }
 }
 
+function updateCameraDiag() {
+  const video = $('video');
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track) { $('camDiag').textContent = 'camera off'; return; }
+  const picture = video.videoWidth > 0 && !sourceIsBlack(video);
+  $('camDiag').textContent = `${track.label || 'camera'} | ${video.videoWidth}x${video.videoHeight} | ${track.readyState}${track.muted ? ' muted' : ''}${video.paused ? ' paused' : ''} | lenses ${lenses.length} | picture ${picture ? 'yes' : 'no'}`;
+}
+
+$('lensBtn').addEventListener('click', async () => {
+  const track = stream && stream.getVideoTracks()[0];
+  const current = track && track.getSettings ? track.getSettings().deviceId : null;
+  const index = lenses.findIndex(lens => lens.deviceId === current);
+  const next = lenses[(index + 1) % lenses.length];
+  closeCamera();
+  if (await openWithPicture(next.deviceId)) return;
+  try {
+    await openCamera(CAMERA_SIZES[0], next.deviceId);
+  } catch (err) {
+    toast('تعذّر تشغيل هذه العدسة، جرّب عدسة أخرى');
+  }
+});
+
 $('startBtn').addEventListener('click', async () => {
+  $('startBtn').textContent = 'جارٍ تشغيل الكاميرا...';
   ensureAudio();
   const sensors = await startSensors();
   const camera = await startCamera();
   keepAwake();
+  $('startBtn').textContent = 'تشغيل الكاميرا والحساسات';
   if (!camera) {
     const secure = window.isSecureContext ? 'اسمح للتطبيق باستخدام الكاميرا من إعدادات المتصفح.' : 'يجب فتح التطبيق عبر رابط https.';
     showStartError('تعذّر تشغيل الكاميرا. ' + secure);
     return;
   }
+  lenses = await listLenses();
+  $('lensBtn').hidden = lenses.length < 2;
+  $('camDiag').hidden = false;
+  updateCameraDiag();
+  setInterval(updateCameraDiag, 1000);
   if (!sensors) {
     showStartError('تعذّر تشغيل حساس الميلان. اسمح بالوصول إلى الحركة والاتجاه ثم أعد المحاولة.');
     return;
@@ -559,13 +615,18 @@ function grabFrame() {
 /* ImageCapture gives the sharpest photo but can return black on Android, so keep a video frame as backup. */
 async function takePhoto() {
   const frame = await grabFrame();
+  shotSource = 'frame';
   const track = stream && stream.getVideoTracks()[0];
   if (track && window.ImageCapture) {
     try {
       const timeout = new Promise((_, reject) => setTimeout(reject, 4000));
       const photo = await Promise.race([new ImageCapture(track).takePhoto(), timeout]);
       $('video').play().catch(() => {});
-      if (!frame || !(await blobIsBlack(photo))) return photo;
+      if (!frame || !(await blobIsBlack(photo))) {
+        shotSource = 'photo';
+        return photo;
+      }
+      shotSource = 'frame, black photo';
     } catch (err) { /* use the video frame */ }
     $('video').play().catch(() => {});
   }
@@ -618,7 +679,7 @@ async function capture() {
   shotName = fileName(angle);
   $('shot').src = URL.createObjectURL(shotBlob);
   $('shotInfo').textContent = lastAngle === null ? 'بدون قراءة زاوية' : `الميلان عند الالتقاط: ${angle.toFixed(1)}°`;
-  $('shotDiag').innerText = diagnostics();
+  $('shotDiag').innerText = `${diagnostics()}\nsource ${shotSource}, ${Math.round(shotBlob.size / 1024)} KB`;
   $('preview').hidden = false;
 }
 
