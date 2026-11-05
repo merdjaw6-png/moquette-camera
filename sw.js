@@ -1,5 +1,5 @@
-const CACHE = 'moquette-v2';
-const FILES = ['./', './index.html', './manifest.json', './icon.svg'];
+const CACHE = 'moquette-v3';
+const FILES = ['./', './index.html', './correct.html', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)));

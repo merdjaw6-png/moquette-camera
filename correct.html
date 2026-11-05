@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>تصحيح الموكيت</title>
+<meta name="theme-color" content="#0b0f12">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+/* Layout: the photo fills the stage, a narrow panel holds the current step beside it (below it on phones). */
+:root {
+  --bg: #0b0f12; --panel: #151b20; --fg: #f2f5f6; --muted: #9aa7ad; --line: rgba(255,255,255,.22);
+  --good: #2fd27a; --near: #ffb020; --bad: #ff4d4d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
+  font-family: "Segoe UI", Tahoma, "Geeza Pro", "Noto Sans Arabic", Roboto, sans-serif; font-size: 15px; line-height: 1.55; }
+[hidden] { display: none !important; }
+button, input { font: inherit; color: inherit; }
+button { border: 0; cursor: pointer; }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+.num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
+
+#app { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 350px; }
+#stageWrap { position: relative; min-width: 0; min-height: 0; background: #000; overflow: hidden; }
+#stage { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+#panel { background: var(--panel); border-inline-start: 1px solid var(--line); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+#panel h1 { font-size: 21px; margin: 0; }
+#panel h2 { font-size: 17px; margin: 0; }
+#panel p { margin: 0; color: #d4dcdf; }
+.step { display: flex; flex-direction: column; gap: 10px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.top a { color: var(--muted); font-size: 14px; }
+.primary { background: var(--good); color: #071015; font-weight: 800; padding: 12px; border-radius: 10px; font-size: 16px; text-align: center; }
+.ghost { background: transparent; border: 1px solid var(--line); padding: 9px 10px; border-radius: 10px; }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; min-width: 0; }
+.hint { color: var(--muted); font-size: 13.5px; }
+
+#pins { display: flex; gap: 6px; }
+.pinTag { flex: 1; text-align: center; padding: 5px 0; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); font-weight: 700; direction: ltr; }
+.pinTag.on { color: #071015; }
+
+#distances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.dist { display: flex; align-items: center; gap: 6px; direction: ltr; }
+.dist label { font-weight: 700; white-space: nowrap; font-size: 14px; }
+.dist input { width: 100%; min-width: 0; background: #0b0f12; border: 1px solid var(--line); border-radius: 8px; padding: 8px; text-align: center; }
+
+#message { padding: 9px 11px; border-radius: 9px; background: rgba(255,77,77,.14); border: 1px solid var(--bad); color: #ffc9c9; }
+#message.warn { background: rgba(255,176,32,.13); border-color: var(--near); color: #ffe0a6; }
+#checks { display: grid; gap: 3px; font-size: 14px; }
+.check { display: flex; justify-content: space-between; gap: 10px; direction: ltr; }
+.check.off { color: var(--near); font-weight: 700; }
+#measure { font-size: 25px; font-weight: 800; text-align: center; padding: 6px; background: #0b0f12; border-radius: 10px; }
+label.toggle { display: flex; gap: 8px; align-items: center; color: #d4dcdf; }
+
+#zoom { position: absolute; bottom: 12px; inset-inline-start: 12px; display: flex; gap: 6px; direction: ltr; }
+#zoom button { width: 42px; height: 42px; background: rgba(11,15,18,.85); border: 1px solid var(--line); border-radius: 9px; font-size: 18px; }
+#zoom #fitBtn { width: auto; padding: 0 10px; font-size: 14px; }
+#loupe { position: absolute; top: 12px; inset-inline-start: 12px; width: 150px; height: 150px; border-radius: 50%; border: 3px solid #fff; background: #000; pointer-events: none; }
+#empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); padding: 24px; text-align: center; pointer-events: none; }
+
+@media (max-width: 800px) {
+  #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 47%); }
+  #panel { border-inline-start: 0; border-top: 1px solid var(--line); padding: 12px max(14px, env(safe-area-inset-left, 0px)) calc(env(safe-area-inset-bottom, 0px) + 14px); }
+  #loupe { width: 120px; height: 120px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stageWrap">
+    <canvas id="stage"></canvas>
+    <div id="empty">اختر صورة الموكيت من الزر، أو اسحبها إلى هنا</div>
+    <canvas id="loupe" width="300" height="300" hidden></canvas>
+    <div id="zoom" hidden>
+      <button id="zoomIn" aria-label="تكبير">+</button>
+      <button id="zoomOut" aria-label="تصغير">−</button>
+      <button id="fitBtn">الكل</button>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div class="top">
+      <h1>تصحيح الموكيت</h1>
+      <a href="index.html">الكاميرا</a>
+    </div>
+
+    <div id="message" hidden role="alert"></div>
+
+    <section class="step" id="stepPhoto">
+      <p>يصحّح الصورة باستعمال المسافات الحقيقية بين 4 كليبسات، ويعطيك ملفًا بالمقاس الحقيقي.</p>
+      <button class="primary" id="pickBtn">اختيار صورة</button>
+      <input type="file" id="file" accept="image/*" hidden>
+    </section>
+
+    <section class="step" id="stepMark" hidden>
+      <h2>1. حدد 4 كليبسات</h2>
+      <p class="hint">اختر كليبسات متباعدة قدر الإمكان، ولا تجعل 3 منها على خط واحد. اضغط على مركز كل كليبس، ثم اسحب النقطة لضبطها.</p>
+      <div id="pins"></div>
+      <div class="row">
+        <button class="ghost" id="undoBtn">حذف آخر نقطة</button>
+        <button class="ghost" id="otherBtn">صورة أخرى</button>
+      </div>
+    </section>
+
+    <section class="step" id="stepDist" hidden>
+      <h2>2. أدخل المسافات بالسنتيمتر</h2>
+      <p class="hint">قس بالمتر من مركز الكليبس إلى مركز الكليبس. يمكنك ترك مسافة واحدة فارغة، لكن المسافات الست تكشف أخطاء القياس.</p>
+      <div id="distances"></div>
+      <button class="primary" id="correctBtn">صحّح الصورة</button>
+    </section>
+
+    <section class="step" id="stepResult" hidden>
+      <h2>3. الصورة المصححة</h2>
+      <p id="sizeInfo"></p>
+      <div id="checks"></div>
+      <h2>تحقق من كليبس آخر</h2>
+      <p class="hint">اضغط على مركزي كليبسين لم تستعملهما، وقارن الرقم بقياسك بالمتر.</p>
+      <div id="measure" class="num">--</div>
+      <label class="toggle"><input type="checkbox" id="marks" checked> إظهار علامات الكليبسات الأربعة</label>
+      <button class="primary" id="saveBtn">حفظ الصورة PNG</button>
+      <p class="hint" id="placeHint"></p>
+      <button class="ghost" id="editBtn">تعديل النقاط والمسافات</button>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const NAMES = ['A', 'B', 'C', 'D'];
+const COLORS = ['#ffd21f', '#35d0ff', '#ff5fd2', '#6dff6d'];
+const PAIRS = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+const PIN_HIT = 28;           // screen pixels around a pin that count as touching it
+const TAP_MOVE = 8;           // screen pixels a press may move and still count as a tap
+const WARN_CM = 0.5;          // measurement mismatch that deserves a warning
+const MAX_SOURCE_PIXELS = 32e6;
+const MAX_OUTPUT_SIDE = 7000;
+const MAX_OUTPUT_PIXELS = 30e6;
+
+let content = null;           // what the stage shows: the photo or the corrected canvas
+let photo = null;
+let result = null;            // { canvas, ppc, anchors }
+let pins = [];
+let measurePins = [];
+let view = { s: 1, x: 0, y: 0 };
+let selected = -1;
+let dragging = null;
+let panning = null;
+let pinch = null;
+let renderQueued = false;
+const pointers = new Map();
+const stage = $('stage');
+const ctx = stage.getContext('2d');
+
+/* ---------- Geometry ---------- */
+
+/* Gaussian elimination with partial pivoting; returns null for a singular system. */
+function solveLinear(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let pivot = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[pivot][c])) pivot = r;
+    if (Math.abs(M[pivot][c]) < 1e-12) return null;
+    [M[c], M[pivot]] = [M[pivot], M[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  const x = new Array(n);
+  for (let r = n - 1; r >= 0; r--) {
+    let sum = M[r][n];
+    for (let k = r + 1; k < n; k++) sum -= M[r][k] * x[k];
+    x[r] = sum / M[r][r];
+  }
+  return x;
+}
+
+const area2 = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+/* Finds flat positions in cm that best match the measured distances (Levenberg-Marquardt),
+   starting from the photo so the layout cannot come out mirrored. */
+function solvePositions(imagePts, distances) {
+  const known = PAIRS.map((pair, i) => ({ pair, d: distances[i] })).filter(item => item.d > 0);
+  const ratio = known.reduce((sum, { pair: [a, b], d }) =>
+    sum + d / Math.hypot(imagePts[a].x - imagePts[b].x, imagePts[a].y - imagePts[b].y), 0) / known.length;
+  let p = imagePts.flatMap(pt => [pt.x * ratio, pt.y * ratio]);
+  const cost = q => known.reduce((sum, { pair: [a, b], d }) =>
+    sum + (Math.hypot(q[2 * a] - q[2 * b], q[2 * a + 1] - q[2 * b + 1]) - d) ** 2, 0);
+
+  let lambda = 1e-3;
+  let current = cost(p);
+  for (let iter = 0; iter < 200 && current > 1e-12; iter++) {
+    const JTJ = Array.from({ length: 8 }, () => new Array(8).fill(0));
+    const JTr = new Array(8).fill(0);
+    for (const { pair: [a, b], d } of known) {
+      const dx = p[2 * a] - p[2 * b], dy = p[2 * a + 1] - p[2 * b + 1];
+      const len = Math.hypot(dx, dy) || 1e-9;
+      const r = len - d;
+      const grad = new Array(8).fill(0);
+      grad[2 * a] = dx / len; grad[2 * a + 1] = dy / len;
+      grad[2 * b] = -dx / len; grad[2 * b + 1] = -dy / len;
+      for (let i = 0; i < 8; i++) {
+        JTr[i] += grad[i] * r;
+        for (let j = 0; j < 8; j++) JTJ[i][j] += grad[i] * grad[j];
+      }
+    }
+    const damped = JTJ.map((row, i) => row.map((v, j) => (i === j ? v + lambda : v)));
+    const step = solveLinear(damped, JTr.map(v => -v));
+    if (!step) { lambda *= 10; continue; }
+    const next = p.map((v, i) => v + step[i]);
+    const nextCost = cost(next);
+    if (nextCost < current) {
+      p = next;
+      current = nextCost;
+      lambda = Math.max(lambda / 3, 1e-9);
+    } else {
+      lambda *= 4;
+    }
+  }
+
+  let world = [0, 1, 2, 3].map(i => ({ x: p[2 * i], y: p[2 * i + 1] }));
+  // Turn the result so it sits the same way round as the photo.
+  const mean = pts => ({ x: pts.reduce((s, q) => s + q.x, 0) / 4, y: pts.reduce((s, q) => s + q.y, 0) / 4 });
+  const mw = mean(world), mi = mean(imagePts);
+  let dot = 0, cross = 0;
+  world.forEach((q, i) => {
+    const ax = q.x - mw.x, ay = q.y - mw.y, bx = imagePts[i].x - mi.x, by = imagePts[i].y - mi.y;
+    dot += ax * bx + ay * by;
+    cross += ax * by - ay * bx;
+  });
+  const angle = Math.atan2(cross, dot), c = Math.cos(angle), s = Math.sin(angle);
+  world = world.map(q => ({ x: (q.x - mw.x) * c - (q.y - mw.y) * s, y: (q.x - mw.x) * s + (q.y - mw.y) * c }));
+  return world;
+}
+
+/* Maps image points to world points. Coordinates are scaled first to keep the system well conditioned. */
+function homography(from, to) {
+  const sI = Math.max(...from.flatMap(q => [Math.abs(q.x), Math.abs(q.y)])) || 1;
+  const sW = Math.max(...to.flatMap(q => [Math.abs(q.x), Math.abs(q.y)])) || 1;
+  const A = [], b = [];
+  from.forEach((q, i) => {
+    const x = q.x / sI, y = q.y / sI, u = to[i].x / sW, v = to[i].y / sW;
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  });
+  const h = solveLinear(A, b);
+  if (!h) return null;
+  return [
+    [sW * h[0] / sI, sW * h[1] / sI, sW * h[2]],
+    [sW * h[3] / sI, sW * h[4] / sI, sW * h[5]],
+    [h[6] / sI, h[7] / sI, 1],
+  ];
+}
+
+function invert3(m) {
+  const [[a, b, c], [d, e, f], [g, h, i]] = m;
+  const A = e * i - f * h, B = f * g - d * i, C = d * h - e * g;
+  const det = a * A + b * B + c * C;
+  if (Math.abs(det) < 1e-18) return null;
+  return [
+    [A / det, (c * h - b * i) / det, (b * f - c * e) / det],
+    [B / det, (a * i - c * g) / det, (c * d - a * f) / det],
+    [C / det, (b * g - a * h) / det, (a * e - b * d) / det],
+  ];
+}
+
+function applyH(m, q) {
+  const w = m[2][0] * q.x + m[2][1] * q.y + m[2][2];
+  return { x: (m[0][0] * q.x + m[0][1] * q.y + m[0][2]) / w, y: (m[1][0] * q.x + m[1][1] * q.y + m[1][2]) / w, w };
+}
+
+/* ---------- Stage ---------- */
+
+function queueRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function activePins() {
+  return result && content === result.canvas ? measurePins : pins;
+}
+
+function maxPins() {
+  return result && content === result.canvas ? 2 : 4;
+}
+
+function resizeStage() {
+  const rect = stage.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  stage.width = Math.round(rect.width * ratio);
+  stage.height = Math.round(rect.height * ratio);
+  queueRender();
+}
+
+function fit() {
+  if (!content) return;
+  const rect = stage.getBoundingClientRect();
+  const s = Math.min(rect.width / content.width, rect.height / content.height) * .96;
+  view = { s, x: (rect.width - content.width * s) / 2, y: (rect.height - content.height * s) / 2 };
+  queueRender();
+}
+
+const toScreen = q => ({ x: q.x * view.s + view.x, y: q.y * view.s + view.y });
+const toImage = q => ({ x: (q.x - view.x) / view.s, y: (q.y - view.y) / view.s });
+
+function drawMark(q, color, label, active) {
+  const p = toScreen(q);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 13, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = active ? 3 : 2;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+  ctx.moveTo(p.x - 7, p.y); ctx.lineTo(p.x + 7, p.y);
+  ctx.moveTo(p.x, p.y - 7); ctx.lineTo(p.x, p.y + 7);
+  ctx.stroke();
+  ctx.font = '700 15px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(label, p.x + 20, p.y - 16);
+  ctx.fillStyle = color;
+  ctx.fillText(label, p.x + 20, p.y - 16);
+}
+
+function render() {
+  const ratio = stage.width / (stage.getBoundingClientRect().width || 1);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, stage.width, stage.height);
+  if (!content) return;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.imageSmoothingEnabled = view.s < 3;
+  ctx.drawImage(content, view.x, view.y, content.width * view.s, content.height * view.s);
+
+  if (result && content === result.canvas) {
+    if ($('marks').checked) result.anchors.forEach((q, i) => drawMark(q, COLORS[i], NAMES[i], false));
+    measurePins.forEach((q, i) => drawMark(q, '#ffffff', String(i + 1), selected === i));
+  } else {
+    pins.forEach((q, i) => drawMark(q, COLORS[i], NAMES[i], selected === i));
+  }
+}
+
+function drawLoupe(q) {
+  const loupe = $('loupe');
+  const l = loupe.getContext('2d');
+  const zoom = Math.max(view.s * 3, 2);
+  l.imageSmoothingEnabled = false;
+  l.fillStyle = '#000';
+  l.fillRect(0, 0, 300, 300);
+  l.save();
+  l.beginPath();
+  l.arc(150, 150, 150, 0, Math.PI * 2);
+  l.clip();
+  l.drawImage(content, 150 - q.x * zoom, 150 - q.y * zoom, content.width * zoom, content.height * zoom);
+  l.restore();
+  l.strokeStyle = '#ff2d2d';
+  l.lineWidth = 2;
+  l.beginPath();
+  l.moveTo(150, 90); l.lineTo(150, 135);
+  l.moveTo(150, 165); l.lineTo(150, 210);
+  l.moveTo(90, 150); l.lineTo(135, 150);
+  l.moveTo(165, 150); l.lineTo(210, 150);
+  l.stroke();
+  loupe.hidden = false;
+}
+
+function pinAt(point) {
+  let best = -1, bestDist = PIN_HIT;
+  activePins().forEach((q, i) => {
+    const p = toScreen(q);
+    const d = Math.hypot(p.x - point.x, p.y - point.y);
+    if (d < bestDist) { best = i; bestDist = d; }
+  });
+  return best;
+}
+
+function eventPoint(e) {
+  const rect = stage.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function zoomAt(point, factor) {
+  const before = toImage(point);
+  view.s = Math.min(Math.max(view.s * factor, .02), 30);
+  view.x = point.x - before.x * view.s;
+  view.y = point.y - before.y * view.s;
+  queueRender();
+}
+
+function clampToContent(q) {
+  return { x: Math.min(Math.max(q.x, 0), content.width), y: Math.min(Math.max(q.y, 0), content.height) };
+}
+
+stage.addEventListener('pointerdown', e => {
+  if (!content) return;
+  stage.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, eventPoint(e));
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+    dragging = null;
+    panning = null;
+    $('loupe').hidden = true;
+    return;
+  }
+  const point = eventPoint(e);
+  const hit = pinAt(point);
+  if (hit >= 0) {
+    selected = hit;
+    const q = activePins()[hit];
+    const at = toImage(point);
+    // Keeps the pin where it is on first touch, so a finger never makes it jump.
+    dragging = { index: hit, dx: q.x - at.x, dy: q.y - at.y };
+    drawLoupe(q);
+  } else {
+    panning = { start: point, last: point, moved: false };
+  }
+  queueRender();
+});
+
+stage.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  const point = eventPoint(e);
+  pointers.set(e.pointerId, point);
+  if (pinch && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    view.x += center.x - pinch.center.x;
+    view.y += center.y - pinch.center.y;
+    zoomAt(center, dist / pinch.dist);
+    pinch = { dist, center };
+    return;
+  }
+  if (dragging) {
+    const at = toImage(point);
+    const q = clampToContent({ x: at.x + dragging.dx, y: at.y + dragging.dy });
+    activePins()[dragging.index] = q;
+    drawLoupe(q);
+    pinsChanged();
+    queueRender();
+  } else if (panning) {
+    if (Math.hypot(point.x - panning.start.x, point.y - panning.start.y) > TAP_MOVE) panning.moved = true;
+    if (panning.moved) {
+      view.x += point.x - panning.last.x;
+      view.y += point.y - panning.last.y;
+      queueRender();
+    }
+    panning.last = point;
+  }
+});
+
+function pointerEnd(e) {
+  if (!pointers.has(e.pointerId)) return;
+  const point = eventPoint(e);
+  pointers.delete(e.pointerId);
+  if (pinch) {
+    if (pointers.size < 2) pinch = null;
+    return;
+  }
+  if (dragging) {
+    dragging = null;
+    $('loupe').hidden = true;
+    return;
+  }
+  if (panning && !panning.moved && e.type === 'pointerup') addPin(point);
+  panning = null;
+}
+stage.addEventListener('pointerup', pointerEnd);
+stage.addEventListener('pointercancel', pointerEnd);
+
+function addPin(point) {
+  const q = toImage(point);
+  if (q.x < 0 || q.y < 0 || q.x > content.width || q.y > content.height) return;
+  const list = activePins();
+  if (list.length >= maxPins()) {
+    if (maxPins() !== 2) return;
+    list.length = 0;   // a third tap starts a new measurement
+  }
+  list.push(q);
+  selected = list.length - 1;
+  pinsChanged();
+  queueRender();
+}
+
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (content) zoomAt(eventPoint(e), e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || selected < 0) return;
+  const list = activePins();
+  if (!list[selected]) return;
+  const step = e.shiftKey ? 5 : 1;
+  const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+  if (!move) return;
+  e.preventDefault();
+  list[selected] = clampToContent({ x: list[selected].x + move[0], y: list[selected].y + move[1] });
+  pinsChanged();
+  queueRender();
+});
+
+const stageCenter = () => {
+  const rect = stage.getBoundingClientRect();
+  return { x: rect.width / 2, y: rect.height / 2 };
+};
+$('zoomIn').addEventListener('click', () => zoomAt(stageCenter(), 1.4));
+$('zoomOut').addEventListener('click', () => zoomAt(stageCenter(), 1 / 1.4));
+$('fitBtn').addEventListener('click', fit);
+window.addEventListener('resize', () => { resizeStage(); fit(); });
+
+/* ---------- Steps ---------- */
+
+function showMessage(text, warn) {
+  $('message').textContent = text || '';
+  $('message').hidden = !text;
+  $('message').classList.toggle('warn', !!warn);
+}
+
+function showStep(name) {
+  $('stepPhoto').hidden = name !== 'photo';
+  $('stepMark').hidden = name !== 'work';
+  $('stepDist').hidden = name !== 'work';
+  $('stepResult').hidden = name !== 'result';
+  $('zoom').hidden = name === 'photo';
+  $('empty').hidden = name !== 'photo';
+}
+
+function pinsChanged() {
+  if (result && content === result.canvas) {
+    if (measurePins.length === 2) {
+      const cm = Math.hypot(measurePins[0].x - measurePins[1].x, measurePins[0].y - measurePins[1].y) / result.ppc;
+      $('measure').textContent = cm.toFixed(1) + ' cm';
+    } else {
+      $('measure').textContent = '--';
+    }
+    return;
+  }
+  [...$('pins').children].forEach((tag, i) => {
+    tag.classList.toggle('on', i < pins.length);
+    tag.style.background = i < pins.length ? COLORS[i] : 'transparent';
+  });
+  $('undoBtn').disabled = !pins.length;
+}
+
+function buildForm() {
+  $('pins').innerHTML = NAMES.map(name => `<div class="pinTag">${name}</div>`).join('');
+  $('distances').innerHTML = PAIRS.map(([a, b], i) =>
+    `<div class="dist"><label for="d${i}">${NAMES[a]}-${NAMES[b]}</label><input id="d${i}" inputmode="decimal" autocomplete="off" placeholder="cm"></div>`).join('');
+}
+
+function loadPhoto(url) {
+  const img = new Image();
+  img.onload = () => {
+    photo = img;
+    content = img;
+    pins = [];
+    measurePins = [];
+    result = null;
+    selected = -1;
+    showMessage('');
+    showStep('work');
+    resizeStage();
+    fit();
+    pinsChanged();
+  };
+  img.onerror = () => showMessage('تعذّر فتح هذه الصورة. جرّب ملف JPG أو PNG.');
+  img.src = url;
+}
+
+function loadFile(file) {
+  if (file) loadPhoto(URL.createObjectURL(file));
+}
+
+$('pickBtn').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+$('otherBtn').addEventListener('click', () => $('file').click());
+$('undoBtn').addEventListener('click', () => {
+  pins.pop();
+  selected = pins.length - 1;
+  pinsChanged();
+  queueRender();
+});
+$('stageWrap').addEventListener('dragover', e => e.preventDefault());
+$('stageWrap').addEventListener('drop', e => { e.preventDefault(); loadFile(e.dataTransfer.files[0]); });
+window.addEventListener('paste', e => {
+  const item = [...(e.clipboardData ? e.clipboardData.files : [])].find(file => file.type.startsWith('image/'));
+  if (item) loadFile(item);
+});
+
+/* Accepts Arabic digits and a decimal comma, which phone keyboards often produce. */
+function readDistance(i) {
+  const text = $('d' + i).value.trim()
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[٫,]/g, '.');
+  if (!text) return 0;
+  const value = Number(text);
+  return value > 0 ? value : NaN;
+}
+
+function sourcePixels() {
+  const scale = Math.min(1, Math.sqrt(MAX_SOURCE_PIXELS / (photo.naturalWidth * photo.naturalHeight)));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(photo.naturalWidth * scale);
+  canvas.height = Math.round(photo.naturalHeight * scale);
+  const c = canvas.getContext('2d', { willReadFrequently: true });
+  c.drawImage(photo, 0, 0, canvas.width, canvas.height);
+  return { data: c.getImageData(0, 0, canvas.width, canvas.height).data, width: canvas.width, height: canvas.height, scale };
+}
+
+/* Area of the output in cm: the photo as far as it maps sensibly, never far beyond the four clips. */
+function outputBounds(H, world) {
+  const xs = world.map(q => q.x), ys = world.map(q => q.y);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  let minX = Math.min(...xs) - span, maxX = Math.max(...xs) + span;
+  let minY = Math.min(...ys) - span, maxY = Math.max(...ys) + span;
+  const w = photo.naturalWidth, h = photo.naturalHeight;
+  const corners = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }].map(q => applyH(H, q));
+  const sameSide = corners.every(q => q.w > 0) || corners.every(q => q.w < 0);
+  if (sameSide) {
+    minX = Math.max(minX, Math.min(...corners.map(q => q.x)));
+    maxX = Math.min(maxX, Math.max(...corners.map(q => q.x)));
+    minY = Math.max(minY, Math.min(...corners.map(q => q.y)));
+    maxY = Math.min(maxY, Math.max(...corners.map(q => q.y)));
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
+
+async function correct() {
+  showMessage('');
+  if (pins.length < 4) { showMessage('حدد الكليبسات الأربعة أولًا.'); return; }
+  const distances = PAIRS.map((_, i) => readDistance(i));
+  const badIndex = distances.findIndex(d => Number.isNaN(d));
+  if (badIndex >= 0) {
+    showMessage(`المسافة ${NAMES[PAIRS[badIndex][0]]}-${NAMES[PAIRS[badIndex][1]]} ليست رقمًا صحيحًا.`);
+    return;
+  }
+  if (distances.filter(d => d > 0).length < 5) {
+    showMessage('أدخل 5 مسافات على الأقل، ويفضَّل المسافات الست كلها.');
+    return;
+  }
+  const smallest = Math.min(...[[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]].map(([a, b, c]) => Math.abs(area2(pins[a], pins[b], pins[c]))));
+  const size = Math.max(photo.naturalWidth, photo.naturalHeight);
+  if (smallest < size * size * 2e-4) {
+    showMessage('3 نقاط تقع تقريبًا على خط واحد، أو توجد نقطتان متقاربتان. اختر كليبسات أكثر تباعدًا.');
+    return;
+  }
+
+  const button = $('correctBtn');
+  button.disabled = true;
+  button.textContent = 'جارٍ التصحيح...';
+  await nextFrame();
+
+  try {
+    const world = solvePositions(pins, distances);
+    const flipped = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]].some(([a, b, c]) =>
+      area2(pins[a], pins[b], pins[c]) * area2(world[a], world[b], world[c]) < 0);
+    if (flipped) throw new Error('layout');
+
+    const H = homography(pins, world);
+    const inverse = H && invert3(H);
+    if (!inverse) throw new Error('layout');
+
+    const source = sourcePixels();
+    const bounds = outputBounds(H, world);
+    const widthCm = bounds.maxX - bounds.minX, heightCm = bounds.maxY - bounds.minY;
+
+    // Keep about the photo's own detail at the clips, within what a browser can handle.
+    const detail = PAIRS.reduce((sum, [a, b]) => sum + Math.hypot(pins[a].x - pins[b].x, pins[a].y - pins[b].y) /
+      Math.hypot(world[a].x - world[b].x, world[a].y - world[b].y), 0) / PAIRS.length;
+    const ppc = Math.max(2, Math.min(detail, MAX_OUTPUT_SIDE / Math.max(widthCm, heightCm),
+      Math.sqrt(MAX_OUTPUT_PIXELS / (widthCm * heightCm))));
+    const width = Math.round(widthCm * ppc), height = Math.round(heightCm * ppc);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const c = canvas.getContext('2d');
+    const out = c.createImageData(width, height);
+    const center = applyH(inverse, { x: world.reduce((s, q) => s + q.x, 0) / 4, y: world.reduce((s, q) => s + q.y, 0) / 4 });
+    const src = source.data, sw = source.width, sh = source.height, ss = source.scale;
+    const [[a, b, t0], [d, e, t1], [g, h, t2]] = inverse;
+    for (let y = 0; y < height; y++) {
+      const v = (y + .5) / ppc + bounds.minY;
+      let o = y * width * 4;
+      for (let x = 0; x < width; x++, o += 4) {
+        const u = (x + .5) / ppc + bounds.minX;
+        const w = g * u + h * v + t2;
+        if (w * center.w <= 0) continue;
+        const sx = (a * u + b * v + t0) / w * ss - .5, sy = (d * u + e * v + t1) / w * ss - .5;
+        if (sx < 0 || sy < 0 || sx >= sw - 1 || sy >= sh - 1) continue;
+        const ix = sx | 0, iy = sy | 0, fx = sx - ix, fy = sy - iy;
+        const i = (iy * sw + ix) * 4, j = i + sw * 4;
+        for (let k = 0; k < 3; k++) {
+          out.data[o + k] = (src[i + k] * (1 - fx) + src[i + 4 + k] * fx) * (1 - fy) +
+            (src[j + k] * (1 - fx) + src[j + 4 + k] * fx) * fy;
+        }
+        out.data[o + 3] = 255;
+      }
+      if (y % 200 === 199) {
+        button.textContent = `جارٍ التصحيح... ${Math.round(y / height * 100)}%`;
+        await nextFrame();
+      }
+    }
+    c.putImageData(out, 0, 0);
+
+    result = {
+      canvas, ppc, widthCm: width / ppc, heightCm: height / ppc,
+      anchors: world.map(q => ({ x: (q.x - bounds.minX) * ppc, y: (q.y - bounds.minY) * ppc })),
+    };
+    measurePins = [];
+    selected = -1;
+    content = canvas;
+    showResult(world, distances);
+  } catch (err) {
+    const layout = err && err.message === 'layout';
+    showMessage(layout
+      ? 'لا تتوافق المسافات مع مواضع النقاط. تأكد أن كل مسافة تخص الكليبسين الصحيحين.'
+      : 'تعذّر تصحيح الصورة، فقد تكون كبيرة جدًا على هذا الجهاز.');
+  }
+  button.disabled = false;
+  button.textContent = 'صحّح الصورة';
+}
+
+function showResult(world, distances) {
+  showStep('result');
+  $('sizeInfo').innerHTML = `المقاس الكلي للملف: <span class="num">${result.widthCm.toFixed(1)} × ${result.heightCm.toFixed(1)} cm</span>`;
+  $('placeHint').innerHTML = `يحمل الملف مقاسه الحقيقي، وقد يظهر بهذا المقاس مباشرة عند وضعه في Illustrator. إن لم يظهر، فاجعل عرضه <span class="num">${result.widthCm.toFixed(1)} cm</span> مع الحفاظ على النسبة.`;
+
+  let worst = 0;
+  $('checks').innerHTML = PAIRS.map(([a, b], i) => {
+    const solved = Math.hypot(world[a].x - world[b].x, world[a].y - world[b].y);
+    const off = distances[i] > 0 ? Math.abs(solved - distances[i]) : 0;
+    worst = Math.max(worst, off);
+    const given = distances[i] > 0 ? distances[i].toFixed(1) : '-';
+    return `<div class="check${off > WARN_CM ? ' off' : ''}"><span>${NAMES[a]}-${NAMES[b]}</span><span>${given} → ${solved.toFixed(1)} cm</span></div>`;
+  }).join('');
+  if (worst > WARN_CM) {
+    showMessage(`المسافات لا تتفق فيما بينها بفرق ${worst.toFixed(1)} سم. راجع قياساتك، فقد يكون أحدها خاطئًا أو لا تقع الكليبسات في مستوى واحد.`, true);
+  }
+  $('measure').textContent = '--';
+  fit();
+}
+
+$('correctBtn').addEventListener('click', correct);
+$('editBtn').addEventListener('click', () => {
+  content = photo;
+  selected = -1;
+  showMessage('');
+  showStep('work');
+  fit();
+  pinsChanged();
+});
+$('marks').addEventListener('change', queueRender);
+
+/* ---------- Saving ---------- */
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/* Adds the PNG resolution chunk right after the header, so design software knows the real size. */
+async function withResolution(blob, pixelsPerCm) {
+  const png = new Uint8Array(await blob.arrayBuffer());
+  const chunk = new Uint8Array(21);
+  const view32 = new DataView(chunk.buffer);
+  view32.setUint32(0, 9);
+  chunk.set([0x70, 0x48, 0x59, 0x73], 4);        // "pHYs"
+  const perMeter = Math.round(pixelsPerCm * 100);
+  view32.setUint32(8, perMeter);
+  view32.setUint32(12, perMeter);
+  chunk[16] = 1;                                  // unit: metre
+  view32.setUint32(17, crc32(chunk.subarray(4, 17)));
+  const headerEnd = 33;                           // signature (8) + IHDR chunk (25)
+  return new Blob([png.subarray(0, headerEnd), chunk, png.subarray(headerEnd)], { type: 'image/png' });
+}
+
+function renderForSave() {
+  const copy = document.createElement('canvas');
+  copy.width = result.canvas.width;
+  copy.height = result.canvas.height;
+  const c = copy.getContext('2d');
+  c.drawImage(result.canvas, 0, 0);
+  if ($('marks').checked) {
+    const arm = result.ppc * 1.5;
+    c.lineWidth = Math.max(1, result.ppc * .08);
+    c.font = `700 ${Math.round(result.ppc * 1.6)}px system-ui, sans-serif`;
+    result.anchors.forEach((q, i) => {
+      c.strokeStyle = c.fillStyle = COLORS[i];
+      c.beginPath();
+      c.moveTo(q.x - arm, q.y); c.lineTo(q.x + arm, q.y);
+      c.moveTo(q.x, q.y - arm); c.lineTo(q.x, q.y + arm);
+      c.stroke();
+      c.fillText(NAMES[i], q.x + arm * .4, q.y - arm * .4);
+    });
+  }
+  return copy;
+}
+
+$('saveBtn').addEventListener('click', async () => {
+  const blob = await new Promise(resolve => renderForSave().toBlob(resolve, 'image/png'));
+  if (!blob) { showMessage('تعذّر إنشاء الملف، فقد تكون الصورة كبيرة جدًا على هذا الجهاز.'); return; }
+  const finalBlob = await withResolution(blob, result.ppc);
+  const name = `moquette_corrected_${result.widthCm.toFixed(0)}x${result.heightCm.toFixed(0)}cm.png`;
+  const file = new File([finalBlob], name, { type: 'image/png' });
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch (err) { /* the viewer closed the sheet */ }
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(file);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+});
+
+buildForm();
+showStep('photo');
+resizeStage();
+</script>
+</body>
+</html>
