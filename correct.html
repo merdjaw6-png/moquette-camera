@@ -115,13 +115,13 @@ label.toggle { display: flex; gap: 8px; align-items: center; color: #d4dcdf; }
 
     <section class="step" id="stepResult" hidden>
       <h2>3. الصورة المصححة</h2>
+      <button class="primary" id="saveBtn">حفظ الصورة PNG</button>
       <p id="sizeInfo"></p>
       <div id="checks"></div>
       <h2>تحقق من كليبس آخر</h2>
       <p class="hint">اضغط على مركزي كليبسين لم تستعملهما، وقارن الرقم بقياسك بالمتر.</p>
       <div id="measure" class="num">--</div>
       <label class="toggle"><input type="checkbox" id="marks" checked> إظهار علامات الكليبسات الأربعة</label>
-      <button class="primary" id="saveBtn">حفظ الصورة PNG</button>
       <p class="hint" id="placeHint"></p>
       <button class="ghost" id="editBtn">تعديل النقاط والمسافات</button>
     </section>
@@ -752,6 +752,7 @@ function showResult(world, distances) {
     showMessage(`المسافات لا تتفق فيما بينها بفرق ${worst.toFixed(1)} سم. راجع قياساتك، فقد يكون أحدها خاطئًا أو لا تقع الكليبسات في مستوى واحد.`, true);
   }
   $('measure').textContent = '--';
+  $('panel').scrollTop = 0;
   fit();
 }
 
